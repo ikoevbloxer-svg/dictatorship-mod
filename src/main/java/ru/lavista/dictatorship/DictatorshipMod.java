@@ -13,7 +13,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.commands.Commands;
-import net.minecraft.commands.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 import java.util.HashMap;
@@ -367,18 +367,18 @@ public final class DictatorshipMod {
             case 1 -> { if (p.isSprinting()) p.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 30, 0, true, false)); }
             case 2 -> { if (!p.getInventory().armor.get(3).is(net.minecraft.world.item.Items.GOLDEN_HELMET)) p.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 40, 0, true, false)); }
             case 3 -> { if (p.level().isNight() && p.level().canSeeSky(p.blockPosition())) p.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 40, 0, true, false)); }
-            case 4 -> p.addEffect(new MobEffectInstance(MobEffects.MINING_FATIGUE, 40, 0, true, false));
+            case 4 -> p.addEffect(new MobEffectInstance(MobEffects.DIG_SLOWDOWN, 40, 0, true, false));
             case 5 -> p.addEffect(new MobEffectInstance(MobEffects.JUMP, 40, 0, true, false));
-            case 6 -> { if (p.getMainHandItem().is(net.minecraft.world.item.Items.APPLE)) p.addEffect(new MobEffectInstance(MobEffects.NAUSEA, 40, 0, true, false)); }
+            case 6 -> { if (p.getMainHandItem().is(net.minecraft.world.item.Items.APPLE)) p.addEffect(new MobEffectInstance(MobEffects.CONFUSION, 40, 0, true, false)); }
             case 7 -> { if (p.level().isNight() && p.level().canSeeSky(p.blockPosition())) p.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 40, 0, true, false)); }
             case 8 -> { if (p.getMainHandItem().is(net.minecraft.world.item.Items.TORCH)) p.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 40, 0, true, false)); }
             case 9 -> { if (p.getDeltaMovement().y > 0.15) p.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 25, 1, true, false)); }
             case 10 -> { if (p.isSprinting()) p.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 30, 0, true, false)); }
-            case 11 -> { if (p.getInventory().contains(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND))) p.addEffect(new MobEffectInstance(MobEffects.MINING_FATIGUE, 40, 0, true, false)); }
-            case 12 -> { if (p.getMainHandItem().is(net.minecraft.world.item.Items.FISHING_ROD)) p.addEffect(new MobEffectInstance(MobEffects.MINING_FATIGUE, 40, 0, true, false)); }
+            case 11 -> { if (p.getInventory().contains(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND))) p.addEffect(new MobEffectInstance(MobEffects.DIG_SLOWDOWN, 40, 0, true, false)); }
+            case 12 -> { if (p.getMainHandItem().is(net.minecraft.world.item.Items.FISHING_ROD)) p.addEffect(new MobEffectInstance(MobEffects.DIG_SLOWDOWN, 40, 0, true, false)); }
             case 13 -> { if (p.distanceToSqr(p.blockPosition().getX(), p.blockPosition().getY(), p.blockPosition().getZ()) < 1) { /* decree is mostly theatrical */ } }
             case 14 -> { if (p.isSleeping()) p.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 40, 0, true, false)); }
-            case 15 -> { if (p.getMainHandItem().is(net.minecraft.world.item.Items.CRAFTING_TABLE)) p.addEffect(new MobEffectInstance(MobEffects.MINING_FATIGUE, 40, 0, true, false)); }
+            case 15 -> { if (p.getMainHandItem().is(net.minecraft.world.item.Items.CRAFTING_TABLE)) p.addEffect(new MobEffectInstance(MobEffects.DIG_SLOWDOWN, 40, 0, true, false)); }
             case 16 -> { if (!p.getInventory().contains(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.RED_DYE))) p.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 40, 0, true, false)); }
             case 17 -> { if (p.level().getBlockState(p.blockPosition().below()).is(Blocks.OAK_LOG) || p.level().getBlockState(p.blockPosition().below()).is(Blocks.BIRCH_LOG)) p.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 40, 0, true, false)); }
             case 18 -> { if (p.getFoodData().getFoodLevel() > 16) p.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 30, 0, true, false)); }
@@ -387,10 +387,10 @@ public final class DictatorshipMod {
             case 21 -> { if (!p.getInventory().contains(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.PAINTING))) p.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 30, 0, true, false)); }
             case 22 -> { if (p.level().getBlockState(p.blockPosition()).is(Blocks.LADDER)) p.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 40, 1, true, false)); }
             case 23 -> { if (p.isSprinting()) p.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 30, 0, true, false)); }
-            case 24 -> p.addEffect(new MobEffectInstance(MobEffects.MINING_FATIGUE, 40, 0, true, false));
+            case 24 -> p.addEffect(new MobEffectInstance(MobEffects.DIG_SLOWDOWN, 40, 0, true, false));
             case 25 -> { if (p.getMainHandItem().is(net.minecraft.world.item.Items.POPPY)) p.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 40, 0, true, false)); }
             case 26 -> { if (p.isInWater()) p.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 30, 0, true, false)); }
-            case 27 -> p.addEffect(new MobEffectInstance(MobEffects.NAUSEA, 40, 0, true, false));
+            case 27 -> p.addEffect(new MobEffectInstance(MobEffects.CONFUSION, 40, 0, true, false));
             case 28 -> { if (p.getMainHandItem().getItem() instanceof net.minecraft.world.item.AxeItem || p.getMainHandItem().getItem() instanceof net.minecraft.world.item.PickaxeItem) p.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 40, 0, true, false)); }
             case 29 -> p.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 30, 0, true, false));
             default -> { }
