@@ -1,0 +1,24 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+
+[[mods]]
+modId="dictatorship"
+version="1.0.0"
+displayName="ДИКТАТУРА: Королевский указ"
+authors="Lavista"
+description='''Абсурдная королевская диктатура: случайные указы, королевский комплекс и наказания.''' 
+
+[[dependencies.dictatorship]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.0,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.dictatorship]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1,1.21.2)"
+ordering="NONE"
+side="BOTH"
