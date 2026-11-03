@@ -33,6 +33,7 @@ public final class BankData extends SavedData {
                 int amount = Math.max(0, entry.getInt("amount"));
                 if (amount > 0) data.balances.put(player, amount);
             } catch (IllegalArgumentException ignored) {
+                // Ignore malformed account entries rather than failing world loading.
             }
         }
         return data;
