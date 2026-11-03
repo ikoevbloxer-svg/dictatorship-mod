@@ -1,0 +1,7 @@
+{
+  "whip_crack": {
+    "sounds": [
+      { "name": "dictatorship:whip_crack", "volume": 0.9 }
+    ]
+  }
+}

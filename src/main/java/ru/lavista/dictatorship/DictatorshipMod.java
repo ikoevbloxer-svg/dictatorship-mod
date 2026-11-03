@@ -28,6 +28,11 @@ import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.neoforged.neoforge.event.level.BlockEvent;
+import net.neoforged.neoforge.event.level.ExplosionEvent;
+import net.neoforged.fml.javafmlmod.FMLJavaModLoadingContext;
+import ru.lavista.dictatorship.item.ModItems;
+import ru.lavista.dictatorship.item.ModSounds;
 
 import java.util.List;
 import java.util.Random;
@@ -40,12 +45,15 @@ public final class DictatorshipMod {
     private static int ticks = 0;
     private static int currentLaw = -1;
     private static boolean palaceBuilt = false;
+    private static BlockPos palaceBase = BlockPos.ZERO;
+    private static ServerLevel palaceLevel;
     private static BlockPos jailCell = BlockPos.ZERO;
     private static BlockPos jailRelease = BlockPos.ZERO;
     private static BlockPos shameSpot = BlockPos.ZERO;
     private static BlockPos hamsterWheel = BlockPos.ZERO;
     private static final Map<UUID, Integer> punishmentModes = new HashMap<>();
     private static final Map<UUID, Horse> patrols = new HashMap<>();
+    private static final Map<UUID, List<Villager>> patrolOfficers = new HashMap<>();
     private static final Map<UUID, Integer> patrolAges = new HashMap<>();
     private static final Map<UUID, Integer> jailTimers = new HashMap<>();
     private static final Map<UUID, Integer> arrestCooldowns = new HashMap<>();
@@ -86,7 +94,42 @@ public final class DictatorshipMod {
     );
 
     public DictatorshipMod() {
+        var modBus = FMLJavaModLoadingContext.get().getModEventBus();
+        ModItems.ITEMS.register(modBus);
+        ModSounds.SOUNDS.register(modBus);
         NeoForge.EVENT_BUS.register(this);
+    }
+
+    private static boolean isRoyalTerritory(BlockPos pos, net.minecraft.world.level.LevelAccessor level) {
+        return palaceLevel != null && level == palaceLevel && !palaceBase.equals(BlockPos.ZERO)
+                && Math.abs(pos.getX() - palaceBase.getX()) <= 42
+                && Math.abs(pos.getZ() - palaceBase.getZ()) <= 42
+                && pos.getY() >= palaceBase.getY() && pos.getY() <= palaceBase.getY() + 20;
+    }
+
+    @SubscribeEvent
+    public void protectRoyalGroundsFromExplosions(ExplosionEvent.Detonate event) {
+        if (palaceLevel == null || event.getLevel() != palaceLevel) return;
+        event.getAffectedBlocks().removeIf(pos -> isRoyalTerritory(pos, event.getLevel()));
+    }
+
+    @SubscribeEvent
+    public void onRoyalPropertyPlace(BlockEvent.EntityPlaceEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player) || !isRoyalTerritory(event.getPos(), event.getLevel())) return;
+        event.setCanceled(true);
+        player.sendSystemMessage(Component.literal("§4Строительство на королевской земле запрещено без лицензии Рахита III."));
+        if (!patrols.containsKey(player.getUUID()) && !jailTimers.containsKey(player.getUUID())
+                && arrestCooldowns.getOrDefault(player.getUUID(), 0) <= 0) dispatchPatrol(player);
+    }
+
+    @SubscribeEvent
+    public void onRoyalPropertyBreak(BlockEvent.BreakEvent event) {
+        if (!(event.getPlayer() instanceof ServerPlayer player)) return;
+        if (!isRoyalTerritory(event.getPos(), event.getLevel())) return;
+        event.setCanceled(true);
+        player.sendSystemMessage(Component.literal("§4ОСКВЕРНЕНИЕ КОРОЛЕВСКОЙ СОБСТВЕННОСТИ! Офицеры уже в пути."));
+        if (!patrols.containsKey(player.getUUID()) && !jailTimers.containsKey(player.getUUID())
+                && arrestCooldowns.getOrDefault(player.getUUID(), 0) <= 0) dispatchPatrol(player);
     }
 
     @SubscribeEvent
@@ -106,6 +149,14 @@ public final class DictatorshipMod {
     }
 
     @SubscribeEvent
+    public void onPlayerLogout(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) {
+            cleanupPatrol(player.getUUID());
+            patrolAges.remove(player.getUUID());
+        }
+    }
+
+    @SubscribeEvent
     public void onServerTick(ServerTickEvent.Post event) {
         MinecraftServer server = event.getServer();
         if (server.getPlayerList().getPlayers().isEmpty()) return;
@@ -122,16 +173,26 @@ public final class DictatorshipMod {
         tickPatrols(server);
         tickJail(server);
         tickBank(server);
-        if (currentLaw < 0) return;
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             Integer cooldown = arrestCooldowns.get(player.getUUID());
             if (cooldown != null && cooldown > 0) arrestCooldowns.put(player.getUUID(), cooldown - 1);
-            applyLaw(player, currentLaw);
+            if (currentLaw >= 0) applyLaw(player, currentLaw);
+            boolean enteredRoyalChambers = isInRoyalChambers(player);
             if (!jailTimers.containsKey(player.getUUID()) && !patrols.containsKey(player.getUUID())
-                    && (arrestCooldowns.getOrDefault(player.getUUID(), 0) <= 0) && violatesLaw(player, currentLaw)) {
+                    && (arrestCooldowns.getOrDefault(player.getUUID(), 0) <= 0)
+                    && (enteredRoyalChambers || (currentLaw >= 0 && violatesLaw(player, currentLaw)))) {
                 dispatchPatrol(player);
             }
         }
+    }
+
+    private static boolean isInRoyalChambers(ServerPlayer player) {
+        if (palaceBase.equals(BlockPos.ZERO) || player.serverLevel() != palaceLevel) return false;
+        BlockPos pos = player.blockPosition();
+        return Math.abs(pos.getX() - palaceBase.getX()) <= 10
+                && Math.abs(pos.getZ() - palaceBase.getZ()) <= 10
+                && pos.getY() >= palaceBase.getY() + 1
+                && pos.getY() <= palaceBase.getY() + 10;
     }
 
     private static boolean violatesLaw(ServerPlayer p, int law) {
@@ -156,6 +217,7 @@ public final class DictatorshipMod {
 
     private static void dispatchPatrol(ServerPlayer player) {
         if (!(player.level() instanceof ServerLevel level)) return;
+        cleanupPatrol(player.getUUID());
         Vec3 away = player.position().subtract(level.getSharedSpawnPos().getCenter());
         if (away.lengthSqr() < 0.01) away = new Vec3(1, 0, 0);
         Vec3 start = player.position().add(away.normalize().scale(12));
@@ -166,6 +228,7 @@ public final class DictatorshipMod {
         horse.setCustomNameVisible(true);
         horse.setPersistenceRequired();
         level.addFreshEntity(horse);
+        List<Villager> officers = new java.util.ArrayList<>();
         for (int i = 0; i < 2; i++) {
             Villager officer = EntityType.VILLAGER.create(level);
             if (officer != null) {
@@ -175,9 +238,11 @@ public final class DictatorshipMod {
                 officer.setPersistenceRequired();
                 level.addFreshEntity(officer);
                 officer.startRiding(horse, true);
+                officers.add(officer);
             }
         }
         patrols.put(player.getUUID(), horse);
+        patrolOfficers.put(player.getUUID(), officers);
         patrolAges.put(player.getUUID(), 0);
         player.sendSystemMessage(Component.literal("§c§lВНИМАНИЕ! §fЗа вами выехала офицерская карета за нарушение королевского указа!"));
     }
@@ -191,17 +256,28 @@ public final class DictatorshipMod {
             if (!horse.isRemoved() && horse.level() == player.level()) {
                 horse.getNavigation().moveTo(player, 1.65);
                 if (horse.distanceToSqr(player) < 12.0 || age > 160) {
-                    horse.discard();
-                    arrestPlayer(player);
-                    patrols.remove(player.getUUID());
+                    cleanupPatrol(player.getUUID());
                     patrolAges.remove(player.getUUID());
+                    arrestPlayer(player);
                 }
-            } else if (age > 160) {
-                patrols.remove(player.getUUID());
+            } else if (age > 160 || horse.level() != player.level()) {
+                cleanupPatrol(player.getUUID());
                 patrolAges.remove(player.getUUID());
                 arrestPlayer(player);
             }
         }
+    }
+
+    /** Removes every entity belonging to this player's escort, not only the horse. */
+    private static void cleanupPatrol(UUID playerId) {
+        List<Villager> officers = patrolOfficers.remove(playerId);
+        if (officers != null) {
+            for (Villager officer : officers) {
+                if (officer != null && !officer.isRemoved()) officer.discard();
+            }
+        }
+        Horse horse = patrols.remove(playerId);
+        if (horse != null && !horse.isRemoved()) horse.discard();
     }
 
     private static void arrestPlayer(ServerPlayer player) {
@@ -281,10 +357,16 @@ public final class DictatorshipMod {
         for (int i = 0; i < 3; i++) {
             double x = player.getX() + (RANDOM.nextDouble() - 0.5) * 8;
             double z = player.getZ() + (RANDOM.nextDouble() - 0.5) * 8;
-            ItemEntity egg = new ItemEntity(level, x, player.getY() + 2.0, z, new ItemStack(Items.EGG));
+            Villager thrower = EntityType.VILLAGER.create(level);
+            if (thrower == null) continue;
+            thrower.moveTo(x, player.getY(), z, player.getYRot(), 0);
+            level.addFreshEntity(thrower);
+            net.minecraft.world.entity.projectile.ThrownEgg egg = new net.minecraft.world.entity.projectile.ThrownEgg(level, thrower);
+            egg.setPos(x, player.getY() + 1.5, z);
             Vec3 direction = player.position().add(0, 0.5, 0).subtract(egg.position()).normalize();
-            egg.setDeltaMovement(direction.scale(0.75).add(0, 0.15, 0));
+            egg.shoot(direction.x, direction.y, direction.z, 0.85F, 3.0F);
             level.addFreshEntity(egg);
+            thrower.discard();
         }
     }
 
@@ -399,6 +481,17 @@ public final class DictatorshipMod {
 
     private static void buildPalace(ServerLevel level, BlockPos origin) {
         BlockPos base = origin.offset(8, 0, 8);
+        palaceBase = base;
+        palaceLevel = level;
+        // Royal grounds: a level grass courtyard enclosed by a continuous fence.
+        for (int x = -42; x <= 42; x++) for (int z = -42; z <= 42; z++) {
+            level.setBlock(base.offset(x, 0, z), Blocks.GRASS_BLOCK.defaultBlockState(), 3);
+            for (int y = 1; y <= 8; y++) level.setBlock(base.offset(x, y, z), Blocks.AIR.defaultBlockState(), 3);
+            if (Math.abs(x) == 42 || Math.abs(z) == 42) {
+                if (!(x == 0 && z == -42)) level.setBlock(base.offset(x, 1, z), Blocks.OAK_FENCE.defaultBlockState(), 3);
+            }
+        }
+        level.setBlock(base.offset(0, 1, -42), Blocks.OAK_FENCE_GATE.defaultBlockState(), 3);
         jailCell = base.offset(19, 1, 0);
         jailRelease = base.offset(19, 1, 6);
         shameSpot = base.offset(0, 1, -19);
@@ -453,6 +546,23 @@ public final class DictatorshipMod {
             level.setBlock(barracks.offset(x, y, z), y == 0 ? floor : edge ? stone : Blocks.AIR.defaultBlockState(), 3);
         }
         level.setBlock(barracks.offset(0, 1, -3), Blocks.OAK_DOOR.defaultBlockState(), 3);
+        // Monument to His Majesty, King Rakhit III.
+        BlockPos statue = base.offset(0, 0, -34);
+        for (int x = -2; x <= 2; x++) for (int z = -2; z <= 2; z++)
+            level.setBlock(statue.offset(x, 0, z), Blocks.POLISHED_BLACKSTONE_BRICKS.defaultBlockState(), 3);
+        for (int y = 1; y <= 4; y++) level.setBlock(statue.offset(0, y, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(0, 5, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(-1, 3, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(1, 3, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(0, 6, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(0, 7, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(0, 8, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(0, 9, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(0, 10, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(0, 11, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(-1, 11, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(1, 11, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(0, 12, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
         level.setBlock(base, Blocks.GOLD_BLOCK.defaultBlockState(), 3); // persistent build marker
         // Visible bank counter and wheel prop.
         BlockPos bank = base.offset(-19, 0, 10);
