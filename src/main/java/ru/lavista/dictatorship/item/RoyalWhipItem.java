@@ -27,7 +27,7 @@ public class RoyalWhipItem extends Item {
         if (player.level().isClientSide()) return;
         target.hurt(player.damageSources().playerAttack(player), 4.0F);
         player.level().playSound(null, target.blockPosition(), ModSounds.WHIP_CRACK.get(),
-                SoundSource.PLAYERS, 1.0F, 0.92F + player.getRandom().nextFloat() * 0.16F);
+                SoundSource.PLAYERS, 1.35F, 0.92F + player.getRandom().nextFloat() * 0.16F);
         stack.hurtAndBreak(1, player, EquipmentSlot.MAINHAND);
     }
 }

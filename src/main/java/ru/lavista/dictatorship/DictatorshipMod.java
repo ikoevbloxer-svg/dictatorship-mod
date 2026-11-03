@@ -6,6 +6,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.animal.Pig;
 import net.minecraft.world.entity.animal.horse.Horse;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.ItemStack;
@@ -32,6 +33,7 @@ import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.event.level.ExplosionEvent;
+import net.neoforged.neoforge.event.entity.living.LivingIncomingDamageEvent;
 import ru.lavista.dictatorship.item.ModItems;
 import ru.lavista.dictatorship.item.ModSounds;
 
@@ -108,6 +110,20 @@ public final class DictatorshipMod {
     }
 
     @SubscribeEvent
+    public void protectRoyalPigs(LivingIncomingDamageEvent event) {
+        if (!(event.getEntity() instanceof Pig pig)) return;
+        if (!(event.getSource().getEntity() instanceof ServerPlayer player)) return;
+        if (isWearingCrown(player)) return;
+
+        event.setCanceled(true);
+        player.sendSystemMessage(Component.literal("§c§lКОРОЛЕВСКИЙ УКАЗ: §fсвиньи находятся под защитой короны. Причинение им вреда запрещено!"));
+        if (!patrols.containsKey(player.getUUID()) && !jailTimers.containsKey(player.getUUID())
+                && arrestCooldowns.getOrDefault(player.getUUID(), 0) <= 0) {
+            dispatchPatrol(player);
+        }
+    }
+
+    @SubscribeEvent
     public void protectRoyalGroundsFromExplosions(ExplosionEvent.Detonate event) {
         if (palaceLevel == null || event.getLevel() != palaceLevel) return;
         event.getAffectedBlocks().removeIf(pos -> isRoyalTerritory(pos, event.getLevel()));
@@ -115,7 +131,7 @@ public final class DictatorshipMod {
 
     @SubscribeEvent
     public void onRoyalPropertyPlace(BlockEvent.EntityPlaceEvent event) {
-        if (!(event.getEntity() instanceof ServerPlayer player) || !isRoyalTerritory(event.getPos(), event.getLevel())) return;
+        if (!(event.getEntity() instanceof ServerPlayer player) || isWearingCrown(player) || !isRoyalTerritory(event.getPos(), event.getLevel())) return;
         event.setCanceled(true);
         player.sendSystemMessage(Component.literal("§4Строительство на королевской земле запрещено без лицензии Рахита III."));
         if (!patrols.containsKey(player.getUUID()) && !jailTimers.containsKey(player.getUUID())
@@ -124,7 +140,7 @@ public final class DictatorshipMod {
 
     @SubscribeEvent
     public void onRoyalPropertyBreak(BlockEvent.BreakEvent event) {
-        if (!(event.getPlayer() instanceof ServerPlayer player)) return;
+        if (!(event.getPlayer() instanceof ServerPlayer player) || isWearingCrown(player)) return;
         if (!isRoyalTerritory(event.getPos(), event.getLevel())) return;
         event.setCanceled(true);
         player.sendSystemMessage(Component.literal("§4ОСКВЕРНЕНИЕ КОРОЛЕВСКОЙ СОБСТВЕННОСТИ! Офицеры уже в пути."));
@@ -138,10 +154,11 @@ public final class DictatorshipMod {
         ServerLevel level = player.serverLevel();
         if (!palaceBuilt) {
             BlockPos spawn = level.getSharedSpawnPos();
-            BlockPos marker = spawn.offset(8, 0, 8);
-            jailCell = spawn.offset(27, 1, 8);
-            jailRelease = spawn.offset(27, 1, 14);
-            if (!level.getBlockState(marker).is(Blocks.GOLD_BLOCK)) buildPalace(level, spawn);
+            BlockPos kingdomOrigin = spawn.offset(56, 0, 0); // 56 blocks east of world spawn
+            BlockPos marker = kingdomOrigin;
+            jailCell = kingdomOrigin.offset(19, 1, 0);
+            jailRelease = kingdomOrigin.offset(19, 1, 6);
+            if (!level.getBlockState(marker).is(Blocks.GOLD_BLOCK)) buildPalace(level, kingdomOrigin);
             palaceBuilt = true;
             player.sendSystemMessage(Component.literal("§6§lКОРОЛЕВСТВО ОСНОВАНО! §r§eДобро пожаловать во владения короны."));
         }
@@ -176,6 +193,11 @@ public final class DictatorshipMod {
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             Integer cooldown = arrestCooldowns.get(player.getUUID());
             if (cooldown != null && cooldown > 0) arrestCooldowns.put(player.getUUID(), cooldown - 1);
+            if (isWearingCrown(player)) {
+                if (patrols.containsKey(player.getUUID())) cleanupPatrol(player.getUUID());
+                if (currentLaw >= 0) { /* Корона освобождает от всех указов. */ }
+                continue;
+            }
             if (currentLaw >= 0) applyLaw(player, currentLaw);
             boolean enteredRoyalChambers = isInRoyalChambers(player);
             if (!jailTimers.containsKey(player.getUUID()) && !patrols.containsKey(player.getUUID())
@@ -184,6 +206,10 @@ public final class DictatorshipMod {
                 dispatchPatrol(player);
             }
         }
+    }
+
+    private static boolean isWearingCrown(ServerPlayer player) {
+        return player.getItemBySlot(net.minecraft.world.entity.EquipmentSlot.HEAD).is(ModItems.ROYAL_CROWN.get());
     }
 
     private static boolean isInRoyalChambers(ServerPlayer player) {
@@ -251,6 +277,7 @@ public final class DictatorshipMod {
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             Horse horse = patrols.get(player.getUUID());
             if (horse == null) continue;
+            if (isWearingCrown(player)) { cleanupPatrol(player.getUUID()); patrolAges.remove(player.getUUID()); continue; }
             int age = patrolAges.getOrDefault(player.getUUID(), 0) + 1;
             patrolAges.put(player.getUUID(), age);
             if (!horse.isRemoved() && horse.level() == player.level()) {
@@ -321,6 +348,15 @@ public final class DictatorshipMod {
             var entry = iterator.next();
             ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
             int left = entry.getValue() - 1;
+            if (player != null && isWearingCrown(player)) {
+                iterator.remove();
+                punishmentModes.remove(player.getUUID());
+                cleanupPatrol(player.getUUID());
+                BlockPos exit = jailRelease.equals(BlockPos.ZERO) ? player.serverLevel().getSharedSpawnPos().offset(27, 1, 14) : jailRelease;
+                player.connection.teleport(exit.getX() + 0.5, exit.getY(), exit.getZ() + 0.5, player.getYRot(), player.getXRot());
+                player.sendSystemMessage(Component.literal("§6§lКОРОНА ПРИЗНАЛА ВАС МОНАРХОМ! §fВсе указы и наказания отменены."));
+                continue;
+            }
             if (player != null) {
                 int mode = punishmentModes.getOrDefault(player.getUUID(), 0);
                 BlockPos target;
@@ -444,6 +480,7 @@ public final class DictatorshipMod {
     }
 
     private static void applyLaw(ServerPlayer p, int law) {
+        if (isWearingCrown(p)) return;
         switch (law) {
             case 0 -> { if (p.isInWater()) p.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 30, 1, true, false)); }
             case 1 -> { if (p.isSprinting()) p.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 30, 0, true, false)); }
@@ -480,99 +517,174 @@ public final class DictatorshipMod {
     }
 
     private static void buildPalace(ServerLevel level, BlockPos origin) {
-        BlockPos base = origin.offset(8, 0, 8);
+        // origin is the kingdom centre, deliberately placed 56 blocks from world spawn.
+        BlockPos base = origin;
         palaceBase = base;
         palaceLevel = level;
-        // Royal grounds: a level grass courtyard enclosed by a continuous fence.
+
+        BlockState stone = Blocks.STONE_BRICKS.defaultBlockState();
+        BlockState polished = Blocks.POLISHED_ANDESITE.defaultBlockState();
+        BlockState dark = Blocks.DEEPSLATE_BRICKS.defaultBlockState();
+        BlockState gold = Blocks.GOLD_BLOCK.defaultBlockState();
+        BlockState roof = Blocks.DARK_OAK_PLANKS.defaultBlockState();
+
+        // Royal courtyard: paved central avenue, trimmed lawn and a proper perimeter wall.
         for (int x = -42; x <= 42; x++) for (int z = -42; z <= 42; z++) {
-            level.setBlock(base.offset(x, 0, z), Blocks.GRASS_BLOCK.defaultBlockState(), 3);
-            for (int y = 1; y <= 8; y++) level.setBlock(base.offset(x, y, z), Blocks.AIR.defaultBlockState(), 3);
+            level.setBlock(base.offset(x, 0, z),
+                    (Math.abs(x) <= 2 || Math.abs(z) <= 2) ? polished : Blocks.GRASS_BLOCK.defaultBlockState(), 3);
+            for (int y = 1; y <= 14; y++) level.setBlock(base.offset(x, y, z), Blocks.AIR.defaultBlockState(), 3);
             if (Math.abs(x) == 42 || Math.abs(z) == 42) {
-                if (!(x == 0 && z == -42)) level.setBlock(base.offset(x, 1, z), Blocks.OAK_FENCE.defaultBlockState(), 3);
+                level.setBlock(base.offset(x, 1, z), stone, 3);
+                level.setBlock(base.offset(x, 2, z), Blocks.STONE_BRICK_WALL.defaultBlockState(), 3);
+                if ((x % 8 == 0 && Math.abs(z) == 42) || (z % 8 == 0 && Math.abs(x) == 42))
+                    level.setBlock(base.offset(x, 3, z), Blocks.LANTERN.defaultBlockState(), 3);
             }
         }
-        level.setBlock(base.offset(0, 1, -42), Blocks.OAK_FENCE_GATE.defaultBlockState(), 3);
-        jailCell = base.offset(19, 1, 0);
-        jailRelease = base.offset(19, 1, 6);
-        shameSpot = base.offset(0, 1, -19);
-        hamsterWheel = base.offset(0, 1, -26);
-        int w = 25, d = 25, h = 11;
-        BlockState stone = Blocks.STONE_BRICKS.defaultBlockState();
-        BlockState floor = Blocks.POLISHED_ANDESITE.defaultBlockState();
-        BlockState gold = Blocks.GOLD_BLOCK.defaultBlockState();
-        // Clear and build a compact, walk-in royal hall with corner towers.
-        for (int x = -w/2; x <= w/2; x++) for (int z = -d/2; z <= d/2; z++) {
-            for (int y = 0; y <= h; y++) {
-                boolean edge = Math.abs(x) == w/2 || Math.abs(z) == d/2;
+        // Main gate with stone piers and gold caps.
+        for (int x : new int[]{-3, 3}) for (int y = 1; y <= 4; y++)
+            level.setBlock(base.offset(x, y, -42), y == 4 ? gold : stone, 3);
+        level.setBlock(base.offset(0, 1, -42), Blocks.DARK_OAK_FENCE_GATE.defaultBlockState(), 3);
+        level.setBlock(base.offset(0, 2, -42), Blocks.DARK_OAK_FENCE_GATE.defaultBlockState(), 3);
+
+        // Palace: broad symmetrical hall, tall corner towers, layered roof and grand staircase.
+        int halfW = 13, halfD = 12, wallH = 9;
+        for (int x = -halfW; x <= halfW; x++) for (int z = -halfD; z <= halfD; z++) {
+            for (int y = 0; y <= 14; y++) {
+                boolean edge = Math.abs(x) == halfW || Math.abs(z) == halfD;
                 BlockState state = Blocks.AIR.defaultBlockState();
-                if (y == 0) state = floor;
-                else if (edge && y < h) state = (y % 4 == 0 ? Blocks.CHISELED_STONE_BRICKS.defaultBlockState() : stone);
-                else if (y == h && edge) state = Blocks.STONE_BRICK_SLAB.defaultBlockState();
-                if (edge && y >= 2 && y <= 4 && x == 0 && z == -d/2) state = Blocks.AIR.defaultBlockState();
+                if (y == 0) state = polished;
+                else if (edge && y <= wallH) state = (y == 1 || y == 5 || y == 9) ? stone : Blocks.CHISELED_STONE_BRICKS.defaultBlockState();
+                else if (y == wallH + 1 && edge) state = Blocks.STONE_BRICK_SLAB.defaultBlockState();
                 level.setBlock(base.offset(x, y, z), state, 3);
             }
         }
-        // Windows, throne, dais, and banners.
-        for (int x : new int[]{-8, -4, 4, 8}) for (int y = 4; y <= 6; y++) {
-            level.setBlock(base.offset(x, y, -d/2), Blocks.GLASS_PANE.defaultBlockState(), 3);
-            level.setBlock(base.offset(x, y, d/2), Blocks.GLASS_PANE.defaultBlockState(), 3);
+        // Grand entrance opening and stairs.
+        for (int y = 1; y <= 4; y++) for (int x = -2; x <= 2; x++)
+            level.setBlock(base.offset(x, y, -halfD), Blocks.AIR.defaultBlockState(), 3);
+        for (int step = 1; step <= 5; step++) for (int x = -4; x <= 4; x++)
+            level.setBlock(base.offset(x, 1, -halfD - step), Blocks.STONE_BRICK_STAIRS.defaultBlockState(), 3);
+        // Tall windows with stone mullions.
+        for (int x : new int[]{-9, -5, 5, 9}) for (int y = 3; y <= 7; y++) {
+            level.setBlock(base.offset(x, y, -halfD), Blocks.GLASS_PANE.defaultBlockState(), 3);
+            level.setBlock(base.offset(x, y, halfD), Blocks.GLASS_PANE.defaultBlockState(), 3);
         }
-        for (int x = -2; x <= 2; x++) for (int z = 5; z <= 8; z++)
-            level.setBlock(base.offset(x, 1, z), gold, 3);
+        for (int z : new int[]{-7, -3, 3, 7}) for (int y = 3; y <= 7; y++) {
+            level.setBlock(base.offset(-halfW, y, z), Blocks.GLASS_PANE.defaultBlockState(), 3);
+            level.setBlock(base.offset(halfW, y, z), Blocks.GLASS_PANE.defaultBlockState(), 3);
+        }
+        // Four corner towers with crenellations.
+        for (int sx : new int[]{-1, 1}) for (int sz : new int[]{-1, 1}) {
+            int cx = sx * 10, cz = sz * 9;
+            for (int x = cx - 3; x <= cx + 3; x++) for (int z = cz - 3; z <= cz + 3; z++)
+                for (int y = 1; y <= 13; y++) {
+                    boolean edge = Math.abs(x - cx) == 3 || Math.abs(z - cz) == 3;
+                    if (edge) level.setBlock(base.offset(x, y, z), y % 4 == 0 ? dark : stone, 3);
+                    else if (y == 1) level.setBlock(base.offset(x, y, z), polished, 3);
+                }
+            for (int x = cx - 4; x <= cx + 4; x++) for (int z = cz - 4; z <= cz + 4; z++)
+                if (Math.abs(x - cx) == 4 || Math.abs(z - cz) == 4)
+                    level.setBlock(base.offset(x, 14, z), Blocks.STONE_BRICK_WALL.defaultBlockState(), 3);
+            level.setBlock(base.offset(cx, 15, cz), gold, 3);
+        }
+        // Layered central roof, with a raised ridge and gold finials.
+        for (int layer = 0; layer < 4; layer++) {
+            int inset = layer * 2;
+            int y = 10 + layer;
+            for (int x = -halfW + inset; x <= halfW - inset; x++) for (int z = -halfD + inset; z <= halfD - inset; z++)
+                if (Math.abs(x) == halfW - inset || Math.abs(z) == halfD - inset)
+                    level.setBlock(base.offset(x, y, z), roof, 3);
+        }
+        for (int x = -7; x <= 7; x++) for (int z = -5; z <= 5; z++)
+            level.setBlock(base.offset(x, 13, z), roof, 3);
+        level.setBlock(base.offset(0, 14, 0), gold, 3);
+        level.setBlock(base.offset(0, 15, 0), Blocks.LIGHTNING_ROD.defaultBlockState(), 3);
+        // Throne room details.
+        for (int x = -3; x <= 3; x++) for (int z = 5; z <= 8; z++) level.setBlock(base.offset(x, 1, z), gold, 3);
         level.setBlock(base.offset(0, 2, 6), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
         level.setBlock(base.offset(0, 3, 6), Blocks.DARK_OAK_STAIRS.defaultBlockState(), 3);
-        level.setBlock(base.offset(0, 1, -9), Blocks.LECTERN.defaultBlockState(), 3);
-        // Shame stage in front of the palace.
-        BlockPos stage = base.offset(0, 0, -19);
-        for (int x = -4; x <= 4; x++) for (int z = -2; z <= 2; z++)
-            level.setBlock(stage.offset(x, 0, z), Blocks.DARK_OAK_PLANKS.defaultBlockState(), 3);
-        for (int x : new int[]{-4, 4}) for (int z : new int[]{-2, 2})
-            level.setBlock(stage.offset(x, 1, z), Blocks.DARK_OAK_FENCE.defaultBlockState(), 3);
-        // Small jail wing to the east.
-        BlockPos jail = base.offset(19, 0, 0);
-        for (int x = -3; x <= 3; x++) for (int z = -4; z <= 4; z++) for (int y = 0; y <= 4; y++) {
-            boolean edge = Math.abs(x) == 3 || Math.abs(z) == 4;
-            BlockState s = y == 0 ? Blocks.STONE_BRICKS.defaultBlockState() :
-                edge ? Blocks.IRON_BARS.defaultBlockState() : Blocks.AIR.defaultBlockState();
-            if (y == 4 && edge) s = Blocks.STONE_BRICKS.defaultBlockState();
-            level.setBlock(jail.offset(x, y, z), s, 3);
+        level.setBlock(base.offset(0, 1, -8), Blocks.LECTERN.defaultBlockState(), 3);
+        for (int x : new int[]{-11, 11}) for (int z = -8; z <= 8; z += 4) {
+            level.setBlock(base.offset(x, 1, z), Blocks.QUARTZ_PILLAR.defaultBlockState(), 3);
+            level.setBlock(base.offset(x, 2, z), gold, 3);
         }
-        level.setBlock(jail.offset(0, 1, 0), Blocks.CHAIN.defaultBlockState(), 3);
-        level.setBlock(jail.offset(0, 1, -4), Blocks.IRON_DOOR.defaultBlockState(), 3);
-        // Guard barracks to the west.
-        BlockPos barracks = base.offset(-19, 0, 0);
-        for (int x = -3; x <= 3; x++) for (int z = -3; z <= 3; z++) for (int y = 0; y <= 4; y++) {
-            boolean edge = Math.abs(x) == 3 || Math.abs(z) == 3;
-            level.setBlock(barracks.offset(x, y, z), y == 0 ? floor : edge ? stone : Blocks.AIR.defaultBlockState(), 3);
+
+        // Shame platform: framed, roofed pavilion rather than a bare wooden slab.
+        BlockPos stage = base.offset(0, 0, -25);
+        for (int x = -6; x <= 6; x++) for (int z = -4; z <= 4; z++)
+            level.setBlock(stage.offset(x, 0, z), x == -6 || x == 6 || z == -4 || z == 4 ? dark : roof, 3);
+        for (int x : new int[]{-5, 5}) for (int z : new int[]{-3, 3})
+            for (int y = 1; y <= 5; y++) level.setBlock(stage.offset(x, y, z), stone, 3);
+        for (int x = -6; x <= 6; x++) for (int z = -4; z <= 4; z++)
+            if (Math.abs(x) == 6 || Math.abs(z) == 4) level.setBlock(stage.offset(x, 6, z), roof, 3);
+        level.setBlock(stage.offset(0, 1, 0), Blocks.DARK_OAK_FENCE.defaultBlockState(), 3);
+
+        // Jail: fortified stone building with barred windows, cells, roof and watch corner.
+        BlockPos jail = base.offset(24, 0, 2);
+        jailCell = jail.offset(0, 1, 0);
+        jailRelease = jail.offset(0, 1, 8);
+        for (int x = -6; x <= 6; x++) for (int z = -8; z <= 8; z++) for (int y = 0; y <= 7; y++) {
+            boolean edge = Math.abs(x) == 6 || Math.abs(z) == 8;
+            BlockState state = y == 0 ? dark : edge ? stone : Blocks.AIR.defaultBlockState();
+            if (y == 7 && edge) state = dark;
+            level.setBlock(jail.offset(x, y, z), state, 3);
         }
-        level.setBlock(barracks.offset(0, 1, -3), Blocks.OAK_DOOR.defaultBlockState(), 3);
-        // Monument to His Majesty, King Rakhit III.
-        BlockPos statue = base.offset(0, 0, -34);
-        for (int x = -2; x <= 2; x++) for (int z = -2; z <= 2; z++)
-            level.setBlock(statue.offset(x, 0, z), Blocks.POLISHED_BLACKSTONE_BRICKS.defaultBlockState(), 3);
-        for (int y = 1; y <= 4; y++) level.setBlock(statue.offset(0, y, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(0, 5, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(-1, 3, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(1, 3, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(0, 6, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(0, 7, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(0, 8, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(0, 9, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(0, 10, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(0, 11, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(-1, 11, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(1, 11, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(statue.offset(0, 12, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
-        level.setBlock(base, Blocks.GOLD_BLOCK.defaultBlockState(), 3); // persistent build marker
-        // Visible bank counter and wheel prop.
-        BlockPos bank = base.offset(-19, 0, 10);
-        level.setBlock(bank, Blocks.SMOOTH_STONE.defaultBlockState(), 3);
-        level.setBlock(bank.above(), Blocks.LECTERN.defaultBlockState(), 3);
-        BlockPos wheel = base.offset(0, 0, -26);
+        for (int x : new int[]{-3, 0, 3}) for (int y = 2; y <= 4; y++)
+            level.setBlock(jail.offset(x, y, -8), Blocks.IRON_BARS.defaultBlockState(), 3);
+        for (int z : new int[]{-4, 0, 4}) for (int y = 1; y <= 5; y++)
+            level.setBlock(jail.offset(0, y, z), Blocks.IRON_BARS.defaultBlockState(), 3);
+        level.setBlock(jail.offset(0, 1, -8), Blocks.IRON_DOOR.defaultBlockState(), 3);
+        for (int x = -7; x <= 7; x++) for (int z = -9; z <= 9; z++)
+            if (Math.abs(x) + Math.abs(z) <= 16) level.setBlock(jail.offset(x, 8, z), dark, 3);
+        level.setBlock(jail.offset(0, 9, 0), Blocks.LANTERN.defaultBlockState(), 3);
+
+        // Guard barracks: timber-and-stone lodge with a pitched roof.
+        BlockPos barracks = base.offset(-24, 0, 2);
+        for (int x = -6; x <= 6; x++) for (int z = -5; z <= 5; z++) for (int y = 0; y <= 6; y++) {
+            boolean edge = Math.abs(x) == 6 || Math.abs(z) == 5;
+            BlockState state = y == 0 ? polished : edge && y <= 4 ? (y == 1 ? stone : roof) : Blocks.AIR.defaultBlockState();
+            level.setBlock(barracks.offset(x, y, z), state, 3);
+        }
+        for (int x = -5; x <= 5; x++) for (int z = -4; z <= 4; z++)
+            if (Math.abs(x) + Math.abs(z) <= 8) level.setBlock(barracks.offset(x, 5, z), roof, 3);
+        level.setBlock(barracks.offset(0, 1, -5), Blocks.DARK_OAK_DOOR.defaultBlockState(), 3);
+        for (int x : new int[]{-4, 4}) for (int y = 2; y <= 3; y++)
+            level.setBlock(barracks.offset(x, y, -5), Blocks.GLASS_PANE.defaultBlockState(), 3);
+
+        // Monument on a stepped plinth, with a recognizable crowned silhouette.
+        BlockPos statue = base.offset(0, 0, -36);
+        for (int y = 0; y <= 2; y++) for (int x = -3 + y; x <= 3 - y; x++) for (int z = -3 + y; z <= 3 - y; z++)
+            level.setBlock(statue.offset(x, y, z), y == 2 ? gold : dark, 3);
+        for (int y = 3; y <= 7; y++) level.setBlock(statue.offset(0, y, 0), gold, 3);
+        for (int x : new int[]{-1, 1}) level.setBlock(statue.offset(x, 6, 0), gold, 3);
+        for (int y = 8; y <= 11; y++) level.setBlock(statue.offset(0, y, 0), gold, 3);
+        for (int x = -2; x <= 2; x++) level.setBlock(statue.offset(x, 12, 0), gold, 3);
+        for (int x : new int[]{-2, 2}) level.setBlock(statue.offset(x, 13, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+        level.setBlock(statue.offset(0, 13, 0), Blocks.GOLD_BLOCK.defaultBlockState(), 3);
+
+        // Formal approach, lamps and garden beds.
+        for (int z = -40; z <= -16; z++) for (int x = -2; x <= 2; x++)
+            level.setBlock(base.offset(x, 0, z), polished, 3);
+        for (int z : new int[]{-38, -28, -18, 12, 24, 36}) for (int x : new int[]{-7, 7}) {
+            level.setBlock(base.offset(x, 1, z), Blocks.OAK_FENCE.defaultBlockState(), 3);
+            level.setBlock(base.offset(x, 2, z), Blocks.LANTERN.defaultBlockState(), 3);
+        }
+        for (int x : new int[]{-32, 32}) for (int z : new int[]{-24, -12, 12, 24}) {
+            for (int dx = -2; dx <= 2; dx++) for (int dz = -2; dz <= 2; dz++)
+                level.setBlock(base.offset(x + dx, 0, z + dz), Blocks.MOSS_BLOCK.defaultBlockState(), 3);
+            level.setBlock(base.offset(x, 1, z), Blocks.FLOWERING_AZALEA.defaultBlockState(), 3);
+        }
+
+        // Bank counter and wheel prop.
+        BlockPos bank = base.offset(-24, 0, 14);
+        for (int x = -3; x <= 3; x++) level.setBlock(bank.offset(x, 0, 0), polished, 3);
+        level.setBlock(bank.offset(0, 1, 0), Blocks.LECTERN.defaultBlockState(), 3);
+        BlockPos wheel = base.offset(0, 0, -31);
         for (int x = -2; x <= 2; x++) {
             level.setBlock(wheel.offset(x, 1, 0), Blocks.OAK_FENCE.defaultBlockState(), 3);
             level.setBlock(wheel.offset(x, 2, 0), Blocks.OAK_FENCE.defaultBlockState(), 3);
         }
-        level.setBlock(wheel.offset(0, 0, 0), Blocks.HAY_BLOCK.defaultBlockState(), 3);
+        level.setBlock(wheel, Blocks.HAY_BLOCK.defaultBlockState(), 3);
+        level.setBlock(base, gold, 3); // persistent build marker
     }
+
 }
