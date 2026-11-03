@@ -24,13 +24,14 @@ import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.event.level.ExplosionEvent;
-import net.neoforged.fml.javafmlmod.FMLJavaModLoadingContext;
 import ru.lavista.dictatorship.item.ModItems;
 import ru.lavista.dictatorship.item.ModSounds;
 
@@ -93,8 +94,7 @@ public final class DictatorshipMod {
         new Law("ЗАПРЕТ НА СМЕХ", "Придворные сообщили, что народ слишком весёлый. Веселье приостановлено.")
     );
 
-    public DictatorshipMod() {
-        var modBus = FMLJavaModLoadingContext.get().getModEventBus();
+    public DictatorshipMod(IEventBus modBus, ModContainer modContainer) {
         ModItems.ITEMS.register(modBus);
         ModSounds.SOUNDS.register(modBus);
         NeoForge.EVENT_BUS.register(this);
